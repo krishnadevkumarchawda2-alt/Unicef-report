@@ -17,7 +17,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python packages
-        run: pip install polars plotnine pandas
+       run: pip install polars plotnine pandas jupyter pyyaml nbformat ipykernel
 
       - uses: quarto-dev/quarto-actions/setup@v2
 
