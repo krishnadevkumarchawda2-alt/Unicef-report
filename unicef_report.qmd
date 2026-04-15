@@ -1,0 +1,328 @@
+---
+title: "Children's Health Crisis: Access to Care in a World Left Behind"
+subtitle: "A UNICEF Data Story on Acute Respiratory Infections Among Under-5 Children"
+author: "Data Analyst, UNICEF"
+date: today
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    number-sections: false
+    fig-width: 10
+    fig-height: 6
+    highlight-style: github
+execute:
+  warning: false
+  message: false
+---
+
+## Introduction
+
+Every breath matters — especially for the **world's youngest children**.
+
+Acute Respiratory Infections (**ARI**) are one of the leading causes of child mortality globally, responsible for millions of preventable deaths each year among children **under the age of five**. Yet despite this enormous burden, millions of families in low-income countries never reach a health facility or provider when their child is sick.
+
+This report uses **UNICEF data** spanning over two decades and more than 125 countries to explore a simple but urgent question:
+
+> *When a child under 5 shows symptoms of ARI — are caregivers able to seek help?*
+
+The answer reveals deep and troubling **global inequalities** — rooted in poverty, geography, and the fragility of health systems. Countries like **Argentina and Cuba** see over 92% of families successfully seeking care. Meanwhile, in **Chad, Somalia, and Ethiopia**, fewer than 1 in 4 children receive any attention from a health provider.
+
+This is not just a health story. It is a story about **access, equity, and the urgent need for action**.
+
+---
+
+## Data & Methodology
+
+Three datasets from UNICEF were used in this analysis:
+
+- **`unicef_indicator_1.csv`** — Percentage of children under 5 with ARI symptoms for whom care was sought from a health facility or provider, broken down by country, year, and sex.
+- **`unicef_indicator_2.csv`** — Estimated rate of annual AIDS-related deaths per 100,000 population (ages 10–19).
+- **`unicef_metadata.csv`** — Country-level socioeconomic indicators including GDP per capita, population, life expectancy, and birth rate.
+
+All data transformation was performed using **Polars**, a high-performance DataFrame library for Python. Visualisations were built with **plotnine**, a Python implementation of the Grammar of Graphics.
+
+```{python}
+#| label: setup
+#| echo: true
+
+import polars as pl
+import pandas as pd
+from plotnine import *
+import warnings
+warnings.filterwarnings("ignore")
+
+# ── Load data ──────────────────────────────────────────────────────────────
+ind1 = pl.read_csv("unicef_indicator_1.csv")
+ind2 = pl.read_csv("unicef_indicator_2.csv")
+meta = pl.read_csv("unicef_metadata.csv")
+
+# ── Basic data quality check ───────────────────────────────────────────────
+print(f"Indicator 1  : {ind1.shape[0]:>5} rows × {ind1.shape[1]} cols")
+print(f"Indicator 2  : {ind2.shape[0]:>5} rows × {ind2.shape[1]} cols")
+print(f"Metadata     : {meta.shape[0]:>5} rows × {meta.shape[1]} cols")
+print(f"\nIndicator 1 — unique countries : {ind1['country'].n_unique()}")
+print(f"Indicator 1 — year range       : {ind1['time_period'].min()} – {ind1['time_period'].max()}")
+print(f"Indicator 1 — sex categories   : {ind1['sex'].unique().to_list()}")
+print(f"Indicator 1 — null obs_value   : {ind1['obs_value'].null_count()}")
+```
+
+---
+
+## Global Picture: Who Gets Care?
+
+The map below shows the **average ARI care-seeking rate** (%) for each country across all available years. Darker green indicates higher access to care; darker red flags the countries where children are most at risk of receiving no treatment at all.
+
+The pattern is stark: **Sub-Saharan Africa and parts of South Asia** consistently show the lowest rates, while Latin America, Eastern Europe, and East Asia perform significantly better.
+
+```{python}
+#| label: fig-world-map
+#| fig-cap: "Average ARI care-seeking rate (%) by country. Countries shown in grey had no data available."
+#| echo: true
+
+import urllib.request
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+# ── Country averages ───────────────────────────────────────────────────────
+map_data_df = (
+    ind1
+    .filter(pl.col("sex") == "Total")
+    .group_by(["country", "alpha_3_code"])
+    .agg(pl.col("obs_value").mean().round(1).alias("avg_ari"))
+).to_pandas()
+
+# ── Download Natural Earth world GeoJSON ──────────────────────────────────
+url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
+with urllib.request.urlopen(url) as r:
+    gdf = gpd.read_file(r)
+
+# ── Merge ARI data ─────────────────────────────────────────────────────────
+gdf = gdf.merge(map_data_df, left_on="ADM0_A3", right_on="alpha_3_code", how="left")
+
+# ── Plot ───────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(1, 1, figsize=(14, 7))
+cmap = plt.cm.RdYlGn
+norm = mcolors.Normalize(vmin=0, vmax=100)
+
+gdf[gdf["avg_ari"].isna()].plot(ax=ax, color="#cccccc", edgecolor="white", linewidth=0.3)
+gdf[gdf["avg_ari"].notna()].plot(
+    ax=ax, column="avg_ari", cmap=cmap, norm=norm,
+    edgecolor="white", linewidth=0.3
+)
+
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+sm.set_array([])
+cbar = fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.03, pad=0.02, aspect=40)
+cbar.set_label("Care-seeking rate (%)", fontsize=10)
+ax.set_title("ARI Care-Seeking Rate Among Under-5 Children", fontsize=14, fontweight="bold", pad=12)
+ax.axis("off")
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## The Best and the Worst
+
+The gap between the highest and lowest performers is **staggering**. The bar chart below ranks the **top 15 and bottom 15 countries** by average care-seeking rate.
+
+Countries like **Argentina (94.3%), Macedonia (93.0%), and Cuba (92.9%)** are near-universal in their reach. At the other end, **Botswana (14.0%), Somalia (17.8%), and Chad (20.7%)** represent a public health emergency — where the majority of sick children never see a health professional.
+
+```{python}
+#| label: fig-bar-chart
+#| fig-cap: "Top 15 and bottom 15 countries ranked by average ARI care-seeking rate."
+#| echo: true
+
+# ── Country averages ───────────────────────────────────────────────────────
+country_avg = (
+    ind1
+    .filter(pl.col("sex") == "Total")
+    .group_by(["country", "alpha_3_code"])
+    .agg(pl.col("obs_value").mean().round(1).alias("avg_ari"))
+    .sort("avg_ari", descending=True)
+)
+
+top15    = country_avg.head(15).with_columns(pl.lit("Top 15").alias("group"))
+bottom15 = country_avg.tail(15).with_columns(pl.lit("Bottom 15").alias("group"))
+bar_df   = pl.concat([top15, bottom15]).to_pandas()
+
+bar_df["country"] = bar_df.apply(
+    lambda r: r["country"][:20] + "…" if len(r["country"]) > 20 else r["country"], axis=1
+)
+bar_df = bar_df.sort_values("avg_ari")
+
+(
+    ggplot(bar_df, aes(x="reorder(country, avg_ari)", y="avg_ari", fill="group"))
+    + geom_col(width=0.75)
+    + geom_text(aes(label="avg_ari"), ha="left", size=7.5, nudge_y=0.8)
+    + scale_fill_manual(values={"Top 15": "#1a9850", "Bottom 15": "#d73027"}, name="")
+    + coord_flip()
+    + labs(
+        title="Who Gets Care? Top & Bottom 15 Countries",
+        subtitle="Average ARI care-seeking rate (%) — children under 5",
+        x="", y="Average care-seeking rate (%)"
+    )
+    + theme_minimal()
+    + theme(
+        plot_title=element_text(size=13, face="bold"),
+        plot_subtitle=element_text(size=10, color="#555555"),
+        legend_position="top",
+        axis_text_y=element_text(size=8),
+        figure_size=(10, 9)
+    )
+)
+```
+
+---
+
+## Wealth and Health: Is There a Link?
+
+It would be reasonable to assume that **wealthier countries** provide better healthcare access for children. The scatterplot below tests this assumption directly by plotting **GDP per capita** against **ARI care-seeking rates**, with a linear regression line to reveal the trend.
+
+Each point represents a country–year observation. The regression line shows a **positive relationship**: as GDP per capita increases, care-seeking rates tend to rise. However, the wide spread of data points confirms that **wealth alone is not destiny**. Some low-income countries outperform their GDP peers, pointing to the critical role of **health system design, community health workers, and political will**.
+
+```{python}
+#| label: fig-scatter
+#| fig-cap: "GDP per capita vs. ARI care-seeking rate. Each dot is a country-year observation. The blue line is a linear regression with 95% confidence interval."
+#| echo: true
+
+# ── Join indicator 1 with metadata ────────────────────────────────────────
+scatter_df = (
+    ind1
+    .filter(pl.col("sex") == "Total")
+    .join(
+        meta.select(["alpha_3_code", "year", "GDP per capita (constant 2015 US$)"]),
+        left_on=["alpha_3_code", "time_period"],
+        right_on=["alpha_3_code", "year"],
+        how="inner"
+    )
+    .rename({"GDP per capita (constant 2015 US$)": "gdp_pc"})
+    .filter(pl.col("gdp_pc").is_not_null())
+    .to_pandas()
+)
+
+(
+    ggplot(scatter_df, aes(x="gdp_pc", y="obs_value"))
+    + geom_point(alpha=0.35, color="#2166ac", size=1.8)
+    + geom_smooth(method="lm", color="#d73027", fill="#f4a582", size=1.2)
+    + scale_x_log10(labels=lambda l: [f"${x:,.0f}" for x in l])
+    + labs(
+        title="Does Wealth Predict Healthcare Access?",
+        subtitle="GDP per capita (log scale) vs. ARI care-seeking rate — each dot = one country-year",
+        x="GDP per capita (log scale, constant 2015 USD)",
+        y="ARI care-seeking rate (%)"
+    )
+    + theme_minimal()
+    + theme(
+        plot_title=element_text(size=13, face="bold"),
+        plot_subtitle=element_text(size=10, color="#555555"),
+        figure_size=(10, 6)
+    )
+)
+```
+
+---
+
+## Progress Over Time: A Story of Two Trajectories
+
+Has the situation improved over time? The time-series chart below tracks the **annual ARI care-seeking rate** for a selection of countries from different income brackets.
+
+- **High-performing countries** like Argentina show **consistently high and stable** rates throughout the 2000s–2020s.
+- **Countries like Nigeria and Ethiopia** have seen **modest gains** but remain far below the 70% threshold.
+- **Somalia** shows extreme year-to-year volatility — a reflection of ongoing conflict and collapsed health infrastructure.
+
+The **global average** (dashed line) has moved upward over time, but the pace is too slow to meet children's needs.
+
+```{python}
+#| label: fig-timeseries
+#| fig-cap: "ARI care-seeking rate (%) over time for selected countries, plus the global annual average (dashed line)."
+#| echo: true
+
+# ── Selected countries ─────────────────────────────────────────────────────
+selected = ["Nigeria", "Ethiopia", "India", "Argentina", "Bangladesh", "Somalia", "Bolivia"]
+
+ts_selected = (
+    ind1
+    .filter((pl.col("sex") == "Total") & (pl.col("country").is_in(selected)))
+    .select(["country", "time_period", "obs_value"])
+    .to_pandas()
+)
+
+# ── Global annual average ──────────────────────────────────────────────────
+global_avg = (
+    ind1
+    .filter(pl.col("sex") == "Total")
+    .group_by("time_period")
+    .agg(pl.col("obs_value").mean().round(1).alias("obs_value"))
+    .with_columns(pl.lit("Global Average").alias("country"))
+    .to_pandas()
+)
+
+ts_df = pd.concat([ts_selected, global_avg], ignore_index=True)
+ts_df["line_type"] = ts_df["country"].apply(
+    lambda c: "Global Average" if c == "Global Average" else "Country"
+)
+
+(
+    ggplot(ts_df, aes(x="time_period", y="obs_value", color="country", linetype="line_type"))
+    + geom_line(size=1.1)
+    + geom_point(data=ts_df[ts_df["line_type"] == "Country"], size=2.2, alpha=0.8)
+    + scale_linetype_manual(values={"Global Average": "dashed", "Country": "solid"})
+    + guides(linetype=False)
+    + scale_color_manual(
+        values={
+            "Nigeria":        "#e41a1c",
+            "Ethiopia":       "#ff7f00",
+            "India":          "#984ea3",
+            "Argentina":      "#1a9850",
+            "Bangladesh":     "#377eb8",
+            "Somalia":        "#a65628",
+            "Bolivia":        "#f781bf",
+            "Global Average": "#333333"
+        },
+        name="Country"
+    )
+    + scale_x_continuous(breaks=list(range(2000, 2025, 4)))
+    + labs(
+        title="ARI Care-Seeking Rate Over Time",
+        subtitle="Selected countries vs. global annual average (dashed) — children under 5",
+        x="Year", y="Care-seeking rate (%)"
+    )
+    + theme_minimal()
+    + theme(
+        plot_title=element_text(size=13, face="bold"),
+        plot_subtitle=element_text(size=10, color="#555555"),
+        legend_position="right",
+        figure_size=(11, 6)
+    )
+)
+```
+
+---
+
+## Conclusion
+
+The data tells a clear and troubling story.
+
+**Access to basic healthcare for the world's sickest children is not evenly distributed** — it is deeply shaped by geography, national wealth, and the strength of local health systems. A child born in Chad or Somalia faces dramatically different odds of receiving care for a respiratory infection than a child born in Argentina or Ukraine.
+
+Key takeaways from this analysis:
+
+- The **global average care-seeking rate** has improved over the past two decades, but large disparities remain.
+- There is a **positive correlation between GDP per capita and care-seeking rates**, yet outliers exist — proving that policy choices and health system investment can transcend economic constraints.
+- **Sub-Saharan Africa** consistently lags behind other regions, with several countries stuck below the 30% mark for years.
+- **Time-series trends** show that progress is possible — countries like India and Bangladesh have made meaningful gains — but the pace remains insufficient.
+
+UNICEF's mandate is clear: **every child deserves care, regardless of where they are born**. Closing this gap requires targeted investment in community health workers, supply chains, and the removal of financial and geographic barriers that keep families from seeking help.
+
+> *"The true measure of a nation's standing is how well it attends to its children."* — UNICEF
+
+---
+
+*Data source: UNICEF Data Warehouse. Analysis conducted in Python using Polars and plotnine.*
