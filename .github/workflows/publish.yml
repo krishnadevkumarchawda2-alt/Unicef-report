@@ -18,7 +18,7 @@ jobs:
 
       - name: Install Python packages
         run: |
-          pip install polars plotnine pandas jupyter pyyaml nbformat ipykernel geopandas fiona
+          pip install polars plotnine pandas jupyter pyyaml nbformat ipykernel geopandas fiona pyarrow
 
       - uses: quarto-dev/quarto-actions/setup@v2
 
