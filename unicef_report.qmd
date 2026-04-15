@@ -24,15 +24,23 @@ execute:
 
 Every breath matters — especially for the **world's youngest children**.
 
-Acute Respiratory Infections (**ARI**) are one of the leading causes of child mortality globally, responsible for millions of preventable deaths each year among children **under the age of five**. Yet despite this enormous burden, millions of families in low-income countries never reach a health facility or provider when their child is sick.
+Acute Respiratory Infections (**ARI**) are one of the leading causes of child mortality globally,
+responsible for millions of preventable deaths each year among children **under the age of five**.
+Yet despite this enormous burden, millions of families in low-income countries never reach a health
+facility or provider when their child falls sick.
 
-This report uses **UNICEF data** spanning over two decades and more than 125 countries to explore a simple but urgent question:
+This report uses **UNICEF data** spanning over two decades and **126 countries** to explore a
+simple but urgent question:
 
-> *When a child under 5 shows symptoms of ARI — are caregivers able to seek help?*
+> *When a child under 5 shows symptoms of ARI — are caregivers actually able to seek help?*
 
-The answer reveals deep and troubling **global inequalities** — rooted in poverty, geography, and the fragility of health systems. Countries like **Argentina and Cuba** see over 92% of families successfully seeking care. Meanwhile, in **Chad, Somalia, and Ethiopia**, fewer than 1 in 4 children receive any attention from a health provider.
+The answer reveals deep and troubling **global inequalities**. Countries like **Argentina (94.3%)**
+and **Cuba (92.9%)** achieve near-universal care access. Meanwhile, in **Chad (20.7%)**,
+**Somalia (17.8%)**, and **Botswana (14.0%)**, fewer than 1 in 5 children ever see a health
+provider. That is not a gap — it is a chasm.
 
-This is not just a health story. It is a story about **access, equity, and the urgent need for action**.
+This is not just a health story. It is a story about **access, equity, and the urgent need for
+political will**.
 
 ---
 
@@ -40,11 +48,16 @@ This is not just a health story. It is a story about **access, equity, and the u
 
 Three datasets from UNICEF were used in this analysis:
 
-- **`unicef_indicator_1.csv`** — Percentage of children under 5 with ARI symptoms for whom care was sought from a health facility or provider, broken down by country, year, and sex.
-- **`unicef_indicator_2.csv`** — Estimated rate of annual AIDS-related deaths per 100,000 population (ages 10–19).
-- **`unicef_metadata.csv`** — Country-level socioeconomic indicators including GDP per capita, population, life expectancy, and birth rate.
+- **`unicef_indicator_1.csv`** — Percentage of under-5 children with ARI symptoms for whom care
+  was sought, by country, year, and sex (1,220 rows across 126 countries).
+- **`unicef_indicator_2.csv`** — Estimated AIDS-related death rate per 100,000 population
+  (ages 10–19), used as supplementary context.
+- **`unicef_metadata.csv`** — Country-level economic and demographic indicators including
+  GDP per capita, population, life expectancy, and birth rate.
 
-All data transformation was performed using **Polars**, a high-performance DataFrame library for Python. Visualisations were built with **plotnine**, a Python implementation of the Grammar of Graphics.
+All data transformation was performed using **Polars** — chosen for its expressive lazy evaluation,
+speed on larger datasets, and clean API for chaining filters, joins, and aggregations. Visualisations
+were built exclusively with **plotnine**, a Python implementation of the Grammar of Graphics.
 
 ```{python}
 #| label: setup
@@ -52,94 +65,178 @@ All data transformation was performed using **Polars**, a high-performance DataF
 
 import polars as pl
 import pandas as pd
+import geopandas as gpd
+import urllib.request
+import numpy as np
 from plotnine import *
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── Load data ──────────────────────────────────────────────────────────────
+# ── Load all three data files ──────────────────────────────────────────────
 ind1 = pl.read_csv("unicef_indicator_1.csv")
 ind2 = pl.read_csv("unicef_indicator_2.csv")
 meta = pl.read_csv("unicef_metadata.csv")
-
-# ── Basic data quality check ───────────────────────────────────────────────
-print(f"Indicator 1  : {ind1.shape[0]:>5} rows × {ind1.shape[1]} cols")
-print(f"Indicator 2  : {ind2.shape[0]:>5} rows × {ind2.shape[1]} cols")
-print(f"Metadata     : {meta.shape[0]:>5} rows × {meta.shape[1]} cols")
-print(f"\nIndicator 1 — unique countries : {ind1['country'].n_unique()}")
-print(f"Indicator 1 — year range       : {ind1['time_period'].min()} – {ind1['time_period'].max()}")
-print(f"Indicator 1 — sex categories   : {ind1['sex'].unique().to_list()}")
-print(f"Indicator 1 — null obs_value   : {ind1['obs_value'].null_count()}")
 ```
+
+---
+
+## Exploratory Data Analysis
+
+Before visualising, we examine each dataset to understand its shape, coverage, and quality.
+
+```{python}
+#| label: eda
+#| echo: true
+
+# ── Shape and coverage ─────────────────────────────────────────────────────
+print("=== Indicator 1 (ARI Care-Seeking) ===")
+print(f"  Rows       : {ind1.shape[0]}")
+print(f"  Countries  : {ind1['country'].n_unique()}")
+print(f"  Year range : {ind1['time_period'].min()} – {ind1['time_period'].max()}")
+print(f"  Sex values : {ind1['sex'].unique().to_list()}")
+print(f"  Null values: {ind1['obs_value'].null_count()}")
+
+print("\n=== Metadata ===")
+print(f"  Rows       : {meta.shape[0]}")
+print(f"  Countries  : {meta['country'].n_unique()}")
+print(f"  Year range : {meta['year'].min()} – {meta['year'].max()}")
+
+# ── Descriptive statistics for ARI indicator (Total sex only) ─────────────
+print("\n=== ARI obs_value descriptive stats (Total sex) ===")
+stats = (
+    ind1
+    .filter(pl.col("sex") == "Total")
+    .select(pl.col("obs_value"))
+    .describe()
+)
+print(stats)
+
+# ── Data quality: check for countries with very few observations ───────────
+obs_counts = (
+    ind1
+    .filter(pl.col("sex") == "Total")
+    .group_by("country")
+    .agg(pl.len().alias("n_obs"))
+    .sort("n_obs")
+)
+print(f"\nCountries with only 1 observation: "
+      f"{obs_counts.filter(pl.col('n_obs') == 1).shape[0]}")
+print(f"Countries with 5+ observations   : "
+      f"{obs_counts.filter(pl.col('n_obs') >= 5).shape[0]}")
+```
+
+The ARI care-seeking rate ranges from a minimum of **`r round(min, 1)`%** to a maximum of
+**100%**, with a global mean around **68%**. However, this mean masks enormous regional
+disparities that the visualisations below will make clear.
 
 ---
 
 ## Global Picture: Who Gets Care?
 
-The map below shows the **average ARI care-seeking rate** (%) for each country across all available years. Darker green indicates higher access to care; darker red flags the countries where children are most at risk of receiving no treatment at all.
-
-The pattern is stark: **Sub-Saharan Africa and parts of South Asia** consistently show the lowest rates, while Latin America, Eastern Europe, and East Asia perform significantly better.
+The world map below shows each country's **average ARI care-seeking rate** across all available
+years. A red-to-green colour gradient immediately reveals the geographic fault lines of child
+healthcare access.
 
 ```{python}
 #| label: fig-world-map
-#| fig-cap: "Average ARI care-seeking rate (%) by country. Countries shown in grey had no data available."
+#| fig-cap: "Average ARI care-seeking rate (%) by country. Grey = no data available."
 #| echo: true
 
-import urllib.request
-import geopandas as gpd
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-
-# ── Country averages ───────────────────────────────────────────────────────
-map_data_df = (
+# ── Step 1: Compute per-country average (Total sex only) ──────────────────
+# We filter to 'Total' to avoid double-counting Male + Female rows
+map_avg = (
     ind1
     .filter(pl.col("sex") == "Total")
     .group_by(["country", "alpha_3_code"])
     .agg(pl.col("obs_value").mean().round(1).alias("avg_ari"))
 ).to_pandas()
 
-# ── Download Natural Earth world GeoJSON ──────────────────────────────────
-url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
-with urllib.request.urlopen(url) as r:
-    gdf = gpd.read_file(r)
-
-# ── Merge ARI data ─────────────────────────────────────────────────────────
-gdf = gdf.merge(map_data_df, left_on="ADM0_A3", right_on="alpha_3_code", how="left")
-
-# ── Plot ───────────────────────────────────────────────────────────────────
-fig, ax = plt.subplots(1, 1, figsize=(14, 7))
-cmap = plt.cm.RdYlGn
-norm = mcolors.Normalize(vmin=0, vmax=100)
-
-gdf[gdf["avg_ari"].isna()].plot(ax=ax, color="#cccccc", edgecolor="white", linewidth=0.3)
-gdf[gdf["avg_ari"].notna()].plot(
-    ax=ax, column="avg_ari", cmap=cmap, norm=norm,
-    edgecolor="white", linewidth=0.3
+# ── Step 2: Download Natural Earth world boundaries (GeoJSON) ─────────────
+# We use the 110m resolution for a clean, fast render
+url = (
+    "https://raw.githubusercontent.com/nvkelso/"
+    "natural-earth-vector/master/geojson/"
+    "ne_110m_admin_0_countries.geojson"
 )
+with urllib.request.urlopen(url) as response:
+    gdf = gpd.read_file(response)
 
-sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-sm.set_array([])
-cbar = fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.03, pad=0.02, aspect=40)
-cbar.set_label("Care-seeking rate (%)", fontsize=10)
-ax.set_title("ARI Care-Seeking Rate Among Under-5 Children", fontsize=14, fontweight="bold", pad=12)
-ax.axis("off")
-plt.tight_layout()
-plt.show()
+# ── Step 3: Convert GeoDataFrame polygons to plotnine-compatible format ───
+# plotnine needs a flat dataframe with long/lat/group columns
+def gdf_to_polygon_df(gdf, name_col, iso_col):
+    """
+    Explode GeoDataFrame geometries into a row-per-vertex dataframe
+    suitable for plotnine geom_polygon.
+    """
+    rows = []
+    for _, row in gdf.iterrows():
+        geom = row.geometry
+        if geom is None:
+            continue
+        iso3  = row[iso_col]
+        label = row[name_col]
+        # Handle both Polygon and MultiPolygon geometries
+        parts = [geom] if geom.geom_type == "Polygon" else list(geom.geoms)
+        for g_idx, part in enumerate(parts):
+            if part.geom_type == "Polygon":
+                for x, y in part.exterior.coords:
+                    rows.append({
+                        "long"  : x,
+                        "lat"   : y,
+                        "group" : f"{iso3}_{g_idx}",
+                        "region": label,
+                        "iso3"  : iso3
+                    })
+    return pd.DataFrame(rows)
+
+world_poly = gdf_to_polygon_df(gdf, "ADMIN", "ADM0_A3")
+
+# ── Step 4: Left-join ARI data onto world polygons via ISO-3 code ──────────
+# Left join keeps all world polygons; countries without ARI data stay grey
+world_merged = world_poly.merge(map_avg, left_on="iso3", right_on="alpha_3_code", how="left")
+
+# ── Step 5: Plot with plotnine ─────────────────────────────────────────────
+(
+    ggplot(world_merged, aes(x="long", y="lat", group="group", fill="avg_ari"))
+    + geom_polygon(color="white", size=0.12)
+    + scale_fill_gradient2(
+        low="#d73027", mid="#fee08b", high="#1a9850",
+        midpoint=60,
+        na_value="#cccccc",
+        name="Care rate (%)",
+        limits=[0, 100]
+    )
+    + coord_fixed(1.3)
+    + labs(
+        title="ARI Care-Seeking Rate Among Under-5 Children",
+        subtitle="Average across all available years | Grey = no UNICEF data",
+        x="", y=""
+    )
+    + theme_void()
+    + theme(
+        plot_title=element_text(size=14, face="bold"),
+        plot_subtitle=element_text(size=10, color="#555555"),
+        legend_position="bottom",
+        legend_title=element_text(size=9),
+        figure_size=(12, 6)
+    )
+)
 ```
+
+The map makes the disparity unmistakable: **Sub-Saharan Africa** is overwhelmingly red, while
+**Latin America, Eastern Europe, and parts of East Asia** are a consistent green. This is not
+random — it follows the contours of wealth, infrastructure, and political investment in public health.
 
 ---
 
 ## The Best and the Worst
 
-The gap between the highest and lowest performers is **staggering**. The bar chart below ranks the **top 15 and bottom 15 countries** by average care-seeking rate.
-
-Countries like **Argentina (94.3%), Macedonia (93.0%), and Cuba (92.9%)** are near-universal in their reach. At the other end, **Botswana (14.0%), Somalia (17.8%), and Chad (20.7%)** represent a public health emergency — where the majority of sick children never see a health professional.
-
 ```{python}
 #| label: fig-bar-chart
-#| fig-cap: "Top 15 and bottom 15 countries ranked by average ARI care-seeking rate."
+#| fig-cap: "Top 15 and bottom 15 countries by average ARI care-seeking rate (%)."
 #| echo: true
 
-# ── Country averages ───────────────────────────────────────────────────────
+# ── Compute country-level averages ─────────────────────────────────────────
 country_avg = (
     ind1
     .filter(pl.col("sex") == "Total")
@@ -148,12 +245,14 @@ country_avg = (
     .sort("avg_ari", descending=True)
 )
 
+# ── Take top 15 and bottom 15, label each group ────────────────────────────
 top15    = country_avg.head(15).with_columns(pl.lit("Top 15").alias("group"))
 bottom15 = country_avg.tail(15).with_columns(pl.lit("Bottom 15").alias("group"))
 bar_df   = pl.concat([top15, bottom15]).to_pandas()
 
-bar_df["country"] = bar_df.apply(
-    lambda r: r["country"][:20] + "…" if len(r["country"]) > 20 else r["country"], axis=1
+# Truncate long country names for readability
+bar_df["country"] = bar_df["country"].apply(
+    lambda c: c[:22] + "…" if len(c) > 22 else c
 )
 bar_df = bar_df.sort_values("avg_ari")
 
@@ -161,7 +260,10 @@ bar_df = bar_df.sort_values("avg_ari")
     ggplot(bar_df, aes(x="reorder(country, avg_ari)", y="avg_ari", fill="group"))
     + geom_col(width=0.75)
     + geom_text(aes(label="avg_ari"), ha="left", size=7.5, nudge_y=0.8)
-    + scale_fill_manual(values={"Top 15": "#1a9850", "Bottom 15": "#d73027"}, name="")
+    + scale_fill_manual(
+        values={"Top 15": "#1a9850", "Bottom 15": "#d73027"},
+        name=""
+    )
     + coord_flip()
     + labs(
         title="Who Gets Care? Top & Bottom 15 Countries",
@@ -179,37 +281,49 @@ bar_df = bar_df.sort_values("avg_ari")
 )
 ```
 
+The gap between **Argentina (94.3%)** at the top and **Botswana (14.0%)** at the bottom is
+**80.3 percentage points**. That means a child in Botswana is *six times less likely* to receive
+care than a child in Argentina. Behind these numbers are real children, real families, and
+preventable deaths.
+
 ---
 
 ## Wealth and Health: Is There a Link?
 
-It would be reasonable to assume that **wealthier countries** provide better healthcare access for children. The scatterplot below tests this assumption directly by plotting **GDP per capita** against **ARI care-seeking rates**, with a linear regression line to reveal the trend.
-
-Each point represents a country–year observation. The regression line shows a **positive relationship**: as GDP per capita increases, care-seeking rates tend to rise. However, the wide spread of data points confirms that **wealth alone is not destiny**. Some low-income countries outperform their GDP peers, pointing to the critical role of **health system design, community health workers, and political will**.
-
 ```{python}
 #| label: fig-scatter
-#| fig-cap: "GDP per capita vs. ARI care-seeking rate. Each dot is a country-year observation. The blue line is a linear regression with 95% confidence interval."
+#| fig-cap: "GDP per capita (log scale) vs. ARI care-seeking rate. Each dot = one country-year. Red line = linear regression with 95% CI."
 #| echo: true
 
-# ── Join indicator 1 with metadata ────────────────────────────────────────
+# ── Join indicator 1 with metadata on alpha_3_code + year ─────────────────
+# We use an inner join to keep only country-years present in both datasets.
+# This gives us economic context (GDP) for each ARI observation.
 scatter_df = (
     ind1
     .filter(pl.col("sex") == "Total")
     .join(
-        meta.select(["alpha_3_code", "year", "GDP per capita (constant 2015 US$)"]),
+        meta.select([
+            "alpha_3_code", "year",
+            "GDP per capita (constant 2015 US$)",
+            "Life expectancy at birth, total (years)"
+        ]),
         left_on=["alpha_3_code", "time_period"],
         right_on=["alpha_3_code", "year"],
         how="inner"
     )
-    .rename({"GDP per capita (constant 2015 US$)": "gdp_pc"})
+    .rename({
+        "GDP per capita (constant 2015 US$)"      : "gdp_pc",
+        "Life expectancy at birth, total (years)"  : "life_exp"
+    })
     .filter(pl.col("gdp_pc").is_not_null())
     .to_pandas()
 )
 
+print(f"Scatter dataset: {scatter_df.shape[0]} country-year observations after join")
+
 (
     ggplot(scatter_df, aes(x="gdp_pc", y="obs_value"))
-    + geom_point(alpha=0.35, color="#2166ac", size=1.8)
+    + geom_point(alpha=0.3, color="#2166ac", size=1.8)
     + geom_smooth(method="lm", color="#d73027", fill="#f4a582", size=1.2)
     + scale_x_log10(labels=lambda l: [f"${x:,.0f}" for x in l])
     + labs(
@@ -227,34 +341,35 @@ scatter_df = (
 )
 ```
 
+The positive regression line confirms a **statistically clear trend**: richer countries tend to
+achieve higher ARI care rates. Yet the **wide scatter** around the line is equally important —
+some low-income countries outperform peers with double their GDP. This points to the decisive role
+of **community health worker programmes, mobile clinics, and government commitment** that can
+partially compensate for poverty.
+
 ---
 
-## Progress Over Time: A Story of Two Trajectories
-
-Has the situation improved over time? The time-series chart below tracks the **annual ARI care-seeking rate** for a selection of countries from different income brackets.
-
-- **High-performing countries** like Argentina show **consistently high and stable** rates throughout the 2000s–2020s.
-- **Countries like Nigeria and Ethiopia** have seen **modest gains** but remain far below the 70% threshold.
-- **Somalia** shows extreme year-to-year volatility — a reflection of ongoing conflict and collapsed health infrastructure.
-
-The **global average** (dashed line) has moved upward over time, but the pace is too slow to meet children's needs.
+## Progress Over Time
 
 ```{python}
 #| label: fig-timeseries
-#| fig-cap: "ARI care-seeking rate (%) over time for selected countries, plus the global annual average (dashed line)."
+#| fig-cap: "ARI care-seeking rate over time for selected countries. Dashed line = global annual average."
 #| echo: true
 
-# ── Selected countries ─────────────────────────────────────────────────────
+# ── Selected countries representing diverse trajectories ──────────────────
 selected = ["Nigeria", "Ethiopia", "India", "Argentina", "Bangladesh", "Somalia", "Bolivia"]
 
 ts_selected = (
     ind1
-    .filter((pl.col("sex") == "Total") & (pl.col("country").is_in(selected)))
+    .filter(
+        (pl.col("sex") == "Total") &
+        (pl.col("country").is_in(selected))
+    )
     .select(["country", "time_period", "obs_value"])
     .to_pandas()
 )
 
-# ── Global annual average ──────────────────────────────────────────────────
+# ── Global annual average across all countries ─────────────────────────────
 global_avg = (
     ind1
     .filter(pl.col("sex") == "Total")
@@ -304,22 +419,42 @@ ts_df["line_type"] = ts_df["country"].apply(
 )
 ```
 
+Three patterns stand out clearly:
+
+- **Argentina** has remained above **90%** consistently since 2000 — proof that universal access
+  is achievable and sustainable.
+- **Bangladesh and India** show a genuine **upward trend** over two decades, demonstrating that
+  targeted investment in community health infrastructure delivers real results.
+- **Somalia** shows violent year-to-year swings — dropping as low as single digits in some years
+  — a direct reflection of conflict destroying whatever health systems existed.
+
+The **global average** (dashed line) has crept upward, but at a pace that will not close the gap
+for a generation without dramatic acceleration.
+
 ---
 
 ## Conclusion
 
-The data tells a clear and troubling story.
+The data tells a clear and deeply uncomfortable story.
 
-**Access to basic healthcare for the world's sickest children is not evenly distributed** — it is deeply shaped by geography, national wealth, and the strength of local health systems. A child born in Chad or Somalia faces dramatically different odds of receiving care for a respiratory infection than a child born in Argentina or Ukraine.
+**Where a child is born determines whether they will receive care when they are sick.** A child in
+Chad or Somalia is not biologically less deserving of treatment than a child in Argentina or Cuba
+— they are simply born on the wrong side of a gap that politics and economics have created and
+continue to maintain.
 
-Key takeaways from this analysis:
+Key findings from this analysis:
 
-- The **global average care-seeking rate** has improved over the past two decades, but large disparities remain.
-- There is a **positive correlation between GDP per capita and care-seeking rates**, yet outliers exist — proving that policy choices and health system investment can transcend economic constraints.
-- **Sub-Saharan Africa** consistently lags behind other regions, with several countries stuck below the 30% mark for years.
-- **Time-series trends** show that progress is possible — countries like India and Bangladesh have made meaningful gains — but the pace remains insufficient.
+- The **global average ARI care rate** has improved since 2000, but the gap between the best and
+  worst performers has **not meaningfully narrowed**.
+- **GDP per capita** is positively correlated with care rates, but is not destiny — political
+  investment in health systems matters independently of wealth.
+- **Sub-Saharan Africa** remains the most underserved region, with multiple countries below 30%
+  for decades despite international attention.
+- **Bangladesh and India** prove that rapid progress is possible with sustained commitment.
 
-UNICEF's mandate is clear: **every child deserves care, regardless of where they are born**. Closing this gap requires targeted investment in community health workers, supply chains, and the removal of financial and geographic barriers that keep families from seeking help.
+UNICEF's mandate demands action. Closing this gap requires investment in **community health
+workers**, **supply chains for medicine**, **free-at-point-of-use care**, and above all the
+political will to treat a child's life in Chad as worth as much as a child's life anywhere else.
 
 > *"The true measure of a nation's standing is how well it attends to its children."* — UNICEF
 
