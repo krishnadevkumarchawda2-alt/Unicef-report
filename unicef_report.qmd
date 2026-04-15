@@ -51,7 +51,7 @@ All data transformation was performed using **Polars**, a high-performance DataF
 #| echo: true
 
 import polars as pl
-import polars.selectors as cs
+import pandas as pd
 from plotnine import *
 import warnings
 warnings.filterwarnings("ignore")
@@ -84,13 +84,12 @@ The pattern is stark: **Sub-Saharan Africa and parts of South Asia** consistentl
 #| fig-cap: "Average ARI care-seeking rate (%) by country. Countries shown in grey had no data available."
 #| echo: true
 
-import urllib.request, json
+import urllib.request
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-import numpy as np
 
-# ── Country averages ──────────────────────────────────────────────────────
+# ── Country averages ───────────────────────────────────────────────────────
 map_data_df = (
     ind1
     .filter(pl.col("sex") == "Total")
@@ -98,17 +97,16 @@ map_data_df = (
     .agg(pl.col("obs_value").mean().round(1).alias("avg_ari"))
 ).to_pandas()
 
-# ── Download Natural Earth world shapefile (GeoJSON) ─────────────────────
+# ── Download Natural Earth world GeoJSON ──────────────────────────────────
 url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
 with urllib.request.urlopen(url) as r:
     gdf = gpd.read_file(r)
 
-# Merge on ISO-3 code
+# ── Merge ARI data ─────────────────────────────────────────────────────────
 gdf = gdf.merge(map_data_df, left_on="ADM0_A3", right_on="alpha_3_code", how="left")
 
-# ── Plot with matplotlib ───────────────────────────────────────────────────
+# ── Plot ───────────────────────────────────────────────────────────────────
 fig, ax = plt.subplots(1, 1, figsize=(14, 7))
-
 cmap = plt.cm.RdYlGn
 norm = mcolors.Normalize(vmin=0, vmax=100)
 
@@ -122,10 +120,7 @@ sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
 sm.set_array([])
 cbar = fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.03, pad=0.02, aspect=40)
 cbar.set_label("Care-seeking rate (%)", fontsize=10)
-
 ax.set_title("ARI Care-Seeking Rate Among Under-5 Children", fontsize=14, fontweight="bold", pad=12)
-ax.set_xlabel("")
-ax.set_ylabel("")
 ax.axis("off")
 plt.tight_layout()
 plt.show()
@@ -144,7 +139,7 @@ Countries like **Argentina (94.3%), Macedonia (93.0%), and Cuba (92.9%)** are ne
 #| fig-cap: "Top 15 and bottom 15 countries ranked by average ARI care-seeking rate."
 #| echo: true
 
-# Country averages (Total sex only)
+# ── Country averages ───────────────────────────────────────────────────────
 country_avg = (
     ind1
     .filter(pl.col("sex") == "Total")
@@ -157,7 +152,6 @@ top15    = country_avg.head(15).with_columns(pl.lit("Top 15").alias("group"))
 bottom15 = country_avg.tail(15).with_columns(pl.lit("Bottom 15").alias("group"))
 bar_df   = pl.concat([top15, bottom15]).to_pandas()
 
-# Order countries by avg_ari for the plot
 bar_df["country"] = bar_df.apply(
     lambda r: r["country"][:20] + "…" if len(r["country"]) > 20 else r["country"], axis=1
 )
@@ -189,30 +183,26 @@ bar_df = bar_df.sort_values("avg_ari")
 
 ## Wealth and Health: Is There a Link?
 
-It would be reasonable to assume that **wealthier countries** provide better healthcare access for children. The scatterplot below tests this assumption directly by plotting **GDP per capita** (constant 2015 USD) against **ARI care-seeking rates**, with a linear regression line to reveal the trend.
+It would be reasonable to assume that **wealthier countries** provide better healthcare access for children. The scatterplot below tests this assumption directly by plotting **GDP per capita** against **ARI care-seeking rates**, with a linear regression line to reveal the trend.
 
-Each point represents a country–year observation. The regression line shows a **positive relationship**: as GDP per capita increases, care-seeking rates tend to rise. However, the wide spread of data points — especially in the low-to-middle income range — confirms that **wealth alone is not destiny**. Some low-income countries outperform their GDP peers, pointing to the critical role of **health system design, community health workers, and political will**.
+Each point represents a country–year observation. The regression line shows a **positive relationship**: as GDP per capita increases, care-seeking rates tend to rise. However, the wide spread of data points confirms that **wealth alone is not destiny**. Some low-income countries outperform their GDP peers, pointing to the critical role of **health system design, community health workers, and political will**.
 
 ```{python}
 #| label: fig-scatter
 #| fig-cap: "GDP per capita vs. ARI care-seeking rate. Each dot is a country-year observation. The blue line is a linear regression with 95% confidence interval."
 #| echo: true
 
-# Join ind1 (Total) with metadata on country + year
-ind1_total = ind1.filter(pl.col("sex") == "Total")
-
+# ── Join indicator 1 with metadata ────────────────────────────────────────
 scatter_df = (
-    ind1_total
+    ind1
+    .filter(pl.col("sex") == "Total")
     .join(
-        meta.select(["alpha_3_code", "year", "GDP per capita (constant 2015 US$)", "Life expectancy at birth, total (years)"]),
+        meta.select(["alpha_3_code", "year", "GDP per capita (constant 2015 US$)"]),
         left_on=["alpha_3_code", "time_period"],
         right_on=["alpha_3_code", "year"],
         how="inner"
     )
-    .rename({
-        "GDP per capita (constant 2015 US$)": "gdp_pc",
-        "Life expectancy at birth, total (years)": "life_exp"
-    })
+    .rename({"GDP per capita (constant 2015 US$)": "gdp_pc"})
     .filter(pl.col("gdp_pc").is_not_null())
     .to_pandas()
 )
@@ -241,11 +231,11 @@ scatter_df = (
 
 ## Progress Over Time: A Story of Two Trajectories
 
-Has the situation improved over time? The time-series chart below tracks the **annual ARI care-seeking rate** for a selection of countries from different income brackets. This allows us to observe both **progress** and **stagnation** over two decades.
+Has the situation improved over time? The time-series chart below tracks the **annual ARI care-seeking rate** for a selection of countries from different income brackets.
 
-- **High-performing countries** like Argentina and Belarus show **consistently high and stable** rates throughout the 2000s–2020s.
+- **High-performing countries** like Argentina show **consistently high and stable** rates throughout the 2000s–2020s.
 - **Countries like Nigeria and Ethiopia** have seen **modest gains** but remain far below the 70% threshold.
-- Notably, **Somalia** shows extreme year-to-year volatility — a reflection of ongoing conflict and collapsed health infrastructure.
+- **Somalia** shows extreme year-to-year volatility — a reflection of ongoing conflict and collapsed health infrastructure.
 
 The **global average** (dashed line) has moved upward over time, but the pace is too slow to meet children's needs.
 
@@ -254,7 +244,7 @@ The **global average** (dashed line) has moved upward over time, but the pace is
 #| fig-cap: "ARI care-seeking rate (%) over time for selected countries, plus the global annual average (dashed line)."
 #| echo: true
 
-# Selected countries to highlight
+# ── Selected countries ─────────────────────────────────────────────────────
 selected = ["Nigeria", "Ethiopia", "India", "Argentina", "Bangladesh", "Somalia", "Bolivia"]
 
 ts_selected = (
@@ -264,7 +254,7 @@ ts_selected = (
     .to_pandas()
 )
 
-# Global annual average
+# ── Global annual average ──────────────────────────────────────────────────
 global_avg = (
     ind1
     .filter(pl.col("sex") == "Total")
@@ -274,17 +264,17 @@ global_avg = (
     .to_pandas()
 )
 
-import pandas as pd
 ts_df = pd.concat([ts_selected, global_avg], ignore_index=True)
-
-# Flag for line type
-ts_df["line_type"] = ts_df["country"].apply(lambda c: "Global Average" if c == "Global Average" else "Country")
+ts_df["line_type"] = ts_df["country"].apply(
+    lambda c: "Global Average" if c == "Global Average" else "Country"
+)
 
 (
     ggplot(ts_df, aes(x="time_period", y="obs_value", color="country", linetype="line_type"))
     + geom_line(size=1.1)
     + geom_point(data=ts_df[ts_df["line_type"] == "Country"], size=2.2, alpha=0.8)
-    + scale_linetype_manual(values={"Global Average": "dashed", "Country": "solid"}, guide=False)
+    + scale_linetype_manual(values={"Global Average": "dashed", "Country": "solid"})
+    + guides(linetype=False)
     + scale_color_manual(
         values={
             "Nigeria":        "#e41a1c",
@@ -298,7 +288,7 @@ ts_df["line_type"] = ts_df["country"].apply(lambda c: "Global Average" if c == "
         },
         name="Country"
     )
-    + scale_x_continuous(breaks=range(2000, 2025, 4))
+    + scale_x_continuous(breaks=list(range(2000, 2025, 4)))
     + labs(
         title="ARI Care-Seeking Rate Over Time",
         subtitle="Selected countries vs. global annual average (dashed) — children under 5",
@@ -336,4 +326,3 @@ UNICEF's mandate is clear: **every child deserves care, regardless of where they
 ---
 
 *Data source: UNICEF Data Warehouse. Analysis conducted in Python using Polars and plotnine.*
-
